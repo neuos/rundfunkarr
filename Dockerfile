@@ -52,7 +52,11 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/*
 
 # Install yt-dlp binary
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+# The generic "yt-dlp" asset is a Python zipapp (needs a python3 interpreter,
+# not present in this image) rather than a true standalone binary. Use the
+# musllinux_aarch64 static build instead, matching this image's base
+# (Alpine/musl) and arm64 hosts (e.g. Raspberry Pi).
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_musllinux_aarch64 -o /usr/local/bin/yt-dlp \
     && chmod +x /usr/local/bin/yt-dlp
 
 ENV NODE_ENV=production
