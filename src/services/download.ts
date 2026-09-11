@@ -2,6 +2,21 @@ import { prisma } from "@/lib/db";
 import { randomUUID } from "crypto";
 import * as path from "path";
 
+/**
+ * Format seconds remaining as SABnzbd's strict "H:MM:SS" timeleft format.
+ * Radarr/Sonarr's SABnzbd client parser rejects anything else (including
+ * "M:SS" for under an hour, or a free-text placeholder) with
+ * "Expected either 0:0:0:0 or 0:0:0 format, but received: ..." - which
+ * makes every queue poll fail, so they never see an in-progress download
+ * even while it's genuinely downloading. Always emit the full form.
+ */
+export function formatSabnzbdTimeleft(secondsLeft: number): string {
+  const hours = Math.floor(secondsLeft / 3600);
+  const minutes = Math.floor((secondsLeft % 3600) / 60);
+  const seconds = secondsLeft % 60;
+  return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+}
+
 export interface QueueItem {
   nzo_id: string;
   filename: string;
@@ -108,21 +123,10 @@ export async function getQueue(): Promise<SabnzbdQueue> {
     const remainingBytes = totalSizeNum - downloadedBytesNum;
     const speedMbps = (speedNum / 1024 / 1024).toFixed(1);
 
-    // Calculate time left
-    let timeleft = "";
-    if (d.status === "downloading" && speedNum > 0) {
-      const secondsLeft = Math.round(remainingBytes / speedNum);
-      const hours = Math.floor(secondsLeft / 3600);
-      const minutes = Math.floor((secondsLeft % 3600) / 60);
-      const seconds = secondsLeft % 60;
-      if (hours > 0) {
-        timeleft = `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-      } else {
-        timeleft = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-      }
-    } else if (d.status === "converting") {
-      timeleft = "Konvertiere...";
-    }
+    const timeleft =
+      d.status === "downloading" && speedNum > 0
+        ? formatSabnzbdTimeleft(Math.round(remainingBytes / speedNum))
+        : "0:00:00";
 
     return {
       nzo_id: d.id,
