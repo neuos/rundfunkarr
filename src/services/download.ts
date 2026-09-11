@@ -50,19 +50,46 @@ export interface SabnzbdHistory {
 
 // Extract filename and URL from NZB content
 const FILE_NAME_REGEX = /filename="([^"]+)\.nzb"/;
-const URL_REGEX = /<!--\s*(https?:\/\/[^\s]+)\s*-->/;
+// The URL used to be embedded raw inside an XML comment
+// (<!-- https://... -->), which broke for any source URL containing "--"
+// (illegal inside an XML comment - confirmed live against a real ORF CDN
+// URL, ".../BOesterreich--6_...", which Sonarr's own XML validation
+// rejected outright before the file ever reached this parser). The
+// generator (app/api/newznab/fake_nzb_download/route.ts) now embeds the
+// still-base64-encoded value instead, so this decodes each comment and
+// picks whichever one is actually a URL - order-independent, and matches
+// the older single-comment format from before a title comment was added
+// too (fileName still comes from the multipart upload's own filename, not
+// from a comment).
+const COMMENT_REGEX = /<!--\s*([A-Za-z0-9+/=]+)\s*-->/g;
 
 export function parseNzbContent(nzbContent: string): { fileName: string; url: string } | null {
   const filenameMatch = nzbContent.match(FILE_NAME_REGEX);
-  const urlMatch = nzbContent.match(URL_REGEX);
+  if (!filenameMatch) {
+    return null;
+  }
 
-  if (!filenameMatch || !urlMatch) {
+  let url: string | null = null;
+  for (const match of nzbContent.matchAll(COMMENT_REGEX)) {
+    let decoded: string;
+    try {
+      decoded = Buffer.from(match[1], "base64").toString("utf-8");
+    } catch {
+      continue;
+    }
+    if (/^https?:\/\//.test(decoded)) {
+      url = decoded;
+      break;
+    }
+  }
+
+  if (!url) {
     return null;
   }
 
   return {
     fileName: filenameMatch[1],
-    url: urlMatch[1],
+    url,
   };
 }
 

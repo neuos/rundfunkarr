@@ -1,14 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { parseNzbContent, formatSabnzbdTimeleft } from "./download";
 
+function b64(value: string): string {
+  return Buffer.from(value, "utf-8").toString("base64");
+}
+
 describe("parseNzbContent", () => {
-  it("should parse valid NZB content with filename and URL", () => {
-    const nzbContent = `<?xml version="1.0" encoding="UTF-8"?>
-<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
-  <!-- https://example.com/video.mp4 -->
-  <file poster="RundfunkArr" subject='filename="Show.S01E01.720p.WEB.h264-GROUP.nzb"'>
-    <segments></segments>
-  </file>
+  // Real generator output: title comment first, then URL comment, both
+  // base64-encoded - see the doc comment on COMMENT_REGEX in ./download
+  // for why (a raw URL containing "--" broke XML comment syntax outright).
+  it("should parse valid NZB content with a title comment and a base64 URL comment", () => {
+    const nzbContent = `<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.0//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.0.dtd">
+<!-- ${b64("Show.S01E01.720p.WEB.h264-GROUP")} -->
+<!-- ${b64("https://example.com/video.mp4")} -->
+<nzb>
+    <file poster="RundfunkArr" subject='filename="Show.S01E01.720p.WEB.h264-GROUP.nzb"'>
+        <segments></segments>
+    </file>
 </nzb>`;
 
     const result = parseNzbContent(nzbContent);
@@ -18,9 +27,26 @@ describe("parseNzbContent", () => {
     expect(result?.url).toBe("https://example.com/video.mp4");
   });
 
+  // Regression test: this exact URL (a real ORF CDN filename) broke every
+  // download of the affected releases before the base64 fix - Sonarr's own
+  // XML validation rejected the .nzb file outright with "An XML comment
+  // cannot contain '--'" before it ever reached this parser.
+  it("round-trips a URL containing '--', which would break a raw XML comment", () => {
+    const trickyUrl =
+      "https://apasfiis.sf.apa.at/ipad/cms-worldwide/2026/03/21/2026-03-21_2350_in_01_BOesterreich--6_____14315861__o__4262673436__s16057076_QXA.mp4/chunklist_b6100000.m3u8";
+    const nzbContent = `filename="Boesterreich.S01E06.nzb"
+    <!-- ${b64("Boesterreich.S01E06")} -->
+    <!-- ${b64(trickyUrl)} -->`;
+
+    const result = parseNzbContent(nzbContent);
+
+    expect(result).not.toBeNull();
+    expect(result?.url).toBe(trickyUrl);
+  });
+
   it("should parse filename with special characters", () => {
     const nzbContent = `filename="Der.Tatort.S2024E01.German.720p.WEB.h264-MEDiATHEK.nzb"
-    <!-- https://example.com/video.mp4 -->`;
+    <!-- ${b64("https://example.com/video.mp4")} -->`;
 
     const result = parseNzbContent(nzbContent);
 
@@ -29,7 +55,7 @@ describe("parseNzbContent", () => {
   });
 
   it("should return null when filename is missing", () => {
-    const nzbContent = `<!-- https://example.com/video.mp4 -->`;
+    const nzbContent = `<!-- ${b64("https://example.com/video.mp4")} -->`;
 
     const result = parseNzbContent(nzbContent);
 
@@ -50,9 +76,9 @@ describe("parseNzbContent", () => {
     expect(result).toBeNull();
   });
 
-  it("should handle HTTP URLs", () => {
+  it("should handle HTTP (non-S) URLs", () => {
     const nzbContent = `filename="Show.nzb"
-    <!-- http://example.com/video.mp4 -->`;
+    <!-- ${b64("http://example.com/video.mp4")} -->`;
 
     const result = parseNzbContent(nzbContent);
 
@@ -62,12 +88,11 @@ describe("parseNzbContent", () => {
 
   it("should handle URLs with query parameters", () => {
     const nzbContent = `filename="Show.nzb"
-    <!-- https://example.com/video.mp4?token=abc123 -->`;
+    <!-- ${b64("https://example.com/video.mp4?token=abc123")} -->`;
 
     const result = parseNzbContent(nzbContent);
 
     expect(result).not.toBeNull();
-    // Note: The regex stops at whitespace, so query params with & would be cut off
     expect(result?.url).toBe("https://example.com/video.mp4?token=abc123");
   });
 });
